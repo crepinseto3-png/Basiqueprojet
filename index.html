@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Control Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eff1f7;
+    --bg2: #f2f5fa;
+    --bg3: #f5f6fa;
+    --border: rgba(99,210,255,0.12);
+    --border2: rgba(99,210,255,0.25);
+    --accent: #63d2ff;
+    --accent2: #00ff9d;
+    --accent3: #ff6b6b;
+    --text: #e2e8f0;
+    --text2: #7a8fa6;
+    --text3: #4a5f72;
+    --online: #00ff9d;
+    --offline: #e9c3c3;
+    --card: #131c2e;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+
+  /* LAYOUT */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(10,14,26,0.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 2rem; height: 56px;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-size: 1rem; font-weight: 700; letter-spacing: 0.08em; color: var(--accent); }
+  .logo svg { width: 28px; height: 28px; }
+  .ws-status { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; font-family: var(--mono); color: var(--text2); }
+  .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent3); transition: background .3s; }
+  .ws-dot.connected { background: var(--online); box-shadow: 0 0 8px var(--online); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+  .main { padding-top: 56px; display: flex; height: 100vh; }
+  .sidebar {
+    width: 280px; min-width: 280px; background: var(--bg2);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    height: calc(100vh - 56px); overflow: hidden;
+  }
+  .sidebar-header { padding: 1.25rem 1.25rem 0.75rem; border-bottom: 1px solid var(--border); }
+  .sidebar-title { font-size: 0.65rem; font-family: var(--mono); color: var(--text3); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 0.75rem; }
+  .device-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+  .device-list::-webkit-scrollbar { width: 4px; }
+  .device-list::-webkit-scrollbar-track { background: transparent; }
+  .device-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+  .device-item {
+    display: flex; align-items: center; gap: 10px; padding: 0.75rem;
+    border-radius: 8px; cursor: pointer; transition: all .15s; margin-bottom: 2px;
+    border: 1px solid transparent;
+  }
+  .device-item:hover { background: var(--bg3); border-color: var(--border); }
+  .device-item.active { background: rgba(99,210,255,0.08); border-color: var(--border2); }
+  .device-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .device-dot.online { background: var(--online); box-shadow: 0 0 6px var(--online); }
+  .device-dot.offline { background: var(--text3); }
+  .device-info { flex: 1; min-width: 0; }
+  .device-name { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .device-id { font-size: 0.65rem; font-family: var(--mono); color: var(--text2); }
+  .device-badge { font-size: 0.6rem; font-family: var(--mono); padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+  .device-badge.online { background: rgba(0,255,157,0.12); color: var(--online); }
+  .device-badge.offline { background: rgba(255,107,107,0.12); color: var(--offline); }
+
+  .add-btn {
+    margin: 0.75rem; padding: 0.65rem; border-radius: 8px;
+    background: transparent; border: 1px dashed var(--border2);
+    color: var(--accent); font-family: var(--sans); font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .add-btn:hover { background: rgba(99,210,255,0.08); border-style: solid; }
+
+  /* MAIN CONTENT */
+  .content { flex: 1; overflow-y: auto; padding: 2rem; }
+  .content::-webkit-scrollbar { width: 4px; }
+  .content::-webkit-scrollbar-track { background: transparent; }
+  .content::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+  /* HOME VIEW */
+  .home-view {}
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.25rem; position: relative; overflow: hidden;
+  }
+  .stat-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--accent-color, var(--accent));
+  }
+  .stat-label { font-size: 0.65rem; font-family: var(--mono); color: var(--text3); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+  .stat-value { font-size: 2rem; font-weight: 700; font-family: var(--mono); color: var(--text); }
+  .stat-sub { font-size: 0.7rem; color: var(--text2); margin-top: 0.25rem; }
+
+  .section-title { font-size: 0.65rem; font-family: var(--mono); color: var(--text3); letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 1rem; }
+  .devices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; }
+  .device-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.25rem; cursor: pointer; transition: all .2s; position: relative; overflow: hidden;
+  }
+  .device-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+  .device-card.online-card { border-color: rgba(0,255,157,0.2); }
+  .device-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
+  .device-card-name { font-size: 1rem; font-weight: 700; }
+  .device-card-id { font-size: 0.65rem; font-family: var(--mono); color: var(--text2); margin-top: 2px; }
+  .device-card-desc { font-size: 0.78rem; color: var(--text2); margin-bottom: 1rem; min-height: 1rem; }
+  .device-card-footer { display: flex; justify-content: space-between; align-items: center; }
+  .last-seen { font-size: 0.65rem; font-family: var(--mono); color: var(--text3); }
+
+  /* DEVICE PAGE */
+  .device-page { display: none; }
+  .device-page.visible { display: block; }
+  .page-header { margin-bottom: 2rem; }
+  .breadcrumb { display: flex; align-items: center; gap: 8px; margin-bottom: 0.75rem; font-size: 0.75rem; font-family: var(--mono); color: var(--text2); }
+  .breadcrumb span { cursor: pointer; } .breadcrumb span:hover { color: var(--accent); }
+  .breadcrumb-sep { color: var(--text3); }
+  .page-title { font-size: 1.75rem; font-weight: 700; display: flex; align-items: center; gap: 12px; }
+  .page-title .status-chip {
+    font-size: 0.65rem; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
+    background: rgba(0,255,157,0.1); color: var(--online); border: 1px solid rgba(0,255,157,0.25);
+  }
+  .page-title .status-chip.offline { background: rgba(255,107,107,0.1); color: var(--offline); border-color: rgba(255,107,107,0.25); }
+  .page-meta { font-size: 0.75rem; font-family: var(--mono); color: var(--text2); margin-top: 0.5rem; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 1.5rem; background: var(--bg2); border-radius: 10px; padding: 4px; width: fit-content; }
+  .tab {
+    padding: 0.5rem 1.25rem; border-radius: 7px; cursor: pointer;
+    font-size: 0.8rem; font-weight: 600; color: var(--text2); transition: all .15s; border: none; background: transparent;
+  }
+  .tab.active { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+
+  /* COMMAND TAB */
+  .cmd-section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  .cmd-label { font-size: 0.65rem; font-family: var(--mono); color: var(--text3); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.75rem; }
+  .cmd-input-row { display: flex; gap: 8px; }
+  .cmd-input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-family: var(--mono); font-size: 0.85rem; padding: 0.65rem 1rem;
+    outline: none; transition: border-color .15s;
+  }
+  .cmd-input:focus { border-color: var(--accent); }
+  .cmd-send-btn {
+    background: var(--accent); color: var(--bg); border: none; border-radius: 8px;
+    padding: 0.65rem 1.25rem; font-family: var(--sans); font-weight: 700; font-size: 0.85rem;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+  }
+  .cmd-send-btn:hover { filter: brightness(1.1); }
+  .cmd-send-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  .quick-cmds { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 1rem; }
+  .quick-cmd {
+    padding: 0.4rem 0.85rem; border-radius: 20px; font-size: 0.75rem; font-family: var(--mono);
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+    cursor: pointer; transition: all .15s;
+  }
+  .quick-cmd:hover { border-color: var(--accent); color: var(--accent); }
+
+  .cmd-log { margin-top: 1rem; }
+  .cmd-log-item {
+    display: flex; align-items: flex-start; gap: 10px; padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 0.75rem;
+  }
+  .cmd-log-item:last-child { border-bottom: none; }
+  .cmd-status { padding: 2px 8px; border-radius: 4px; font-size: 0.6rem; flex-shrink: 0; margin-top: 1px; }
+  .cmd-status.sent { background: rgba(99,210,255,.15); color: var(--accent); }
+  .cmd-status.pending { background: rgba(255,200,0,.12); color: #ffc800; }
+  .cmd-status.executed { background: rgba(0,255,157,.12); color: var(--online); }
+  .cmd-text { flex: 1; color: var(--text); }
+  .cmd-time { color: var(--text3); flex-shrink: 0; }
+
+  /* DATA TAB */
+  .data-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+  .data-count { font-size: 0.75rem; font-family: var(--mono); color: var(--text2); }
+  .refresh-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text2);
+    border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.75rem; font-family: var(--mono);
+    cursor: pointer; transition: all .15s;
+  }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .clear-btn {
+    background: transparent; border: 1px solid rgba(255,107,107,.3); color: var(--offline);
+    border-radius: 6px; padding: 0.4rem 0.75rem; font-size: 0.75rem; font-family: var(--mono);
+    cursor: pointer; transition: all .15s; margin-left: auto;
+  }
+  .clear-btn:hover { background: rgba(255,107,107,.08); }
+  .live-badge {
+    display: flex; align-items: center; gap: 6px; padding: 0.3rem 0.75rem;
+    background: rgba(0,255,157,.08); border: 1px solid rgba(0,255,157,.2);
+    border-radius: 20px; font-size: 0.65rem; font-family: var(--mono); color: var(--online);
+  }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--online); animation: pulse 1s infinite; }
+
+  .data-table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .data-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.78rem; }
+  .data-table th { padding: 0.75rem 1rem; text-align: left; background: var(--bg2); color: var(--text3); font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .data-table td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: top; }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: var(--bg3); }
+  .data-table tr.new-row td { animation: fadeIn .5s; }
+  @keyframes fadeIn { from{background:rgba(0,255,157,.08)} to{background:transparent} }
+  .data-val { white-space: pre-wrap; word-break: break-all; max-width: 400px; }
+  .data-ts { color: var(--text2); white-space: nowrap; }
+  .empty-state { text-align: center; padding: 3rem; color: var(--text3); font-size: 0.85rem; }
+
+  /* MODAL */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200;
+    display: flex; align-items: center; justify-content: center; opacity: 0;
+    pointer-events: none; transition: opacity .2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px;
+    padding: 2rem; width: 480px; max-width: 95vw; transform: scale(.95);
+    transition: transform .2s;
+  }
+  .modal-overlay.open .modal { transform: scale(1); }
+  .modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.25rem; }
+  .modal-sub { font-size: 0.78rem; color: var(--text2); margin-bottom: 1.5rem; }
+  .form-group { margin-bottom: 1rem; }
+  .form-label { font-size: 0.65rem; font-family: var(--mono); color: var(--text2); letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 0.4rem; }
+  .form-input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-family: var(--mono); font-size: 0.85rem; padding: 0.65rem 1rem; outline: none;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 1.5rem; }
+  .btn-cancel {
+    background: transparent; border: 1px solid var(--border2); color: var(--text2);
+    border-radius: 8px; padding: 0.6rem 1.25rem; font-family: var(--sans); font-size: 0.85rem;
+    cursor: pointer; transition: all .15s;
+  }
+  .btn-cancel:hover { color: var(--text); }
+  .btn-confirm {
+    background: var(--accent); border: none; color: var(--bg); border-radius: 8px;
+    padding: 0.6rem 1.25rem; font-family: var(--sans); font-weight: 700; font-size: 0.85rem;
+    cursor: pointer; transition: all .15s;
+  }
+  .btn-confirm:hover { filter: brightness(1.1); }
+
+  /* CREDENTIALS MODAL */
+  .cred-box {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; margin-bottom: 0.75rem; font-family: var(--mono);
+  }
+  .cred-label { font-size: 0.6rem; color: var(--text3); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.35rem; }
+  .cred-value { font-size: 0.8rem; color: var(--accent); word-break: break-all; }
+  .copy-row { display: flex; align-items: center; justify-content: space-between; }
+  .copy-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text2);
+    border-radius: 5px; padding: 2px 8px; font-size: 0.65rem; font-family: var(--mono);
+    cursor: pointer; transition: all .15s; flex-shrink: 0; margin-left: 8px;
+  }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .warning-note { background: rgba(255,200,0,.08); border: 1px solid rgba(255,200,0,.2); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.75rem; color: #ffc800; margin-top: 1rem; }
+
+  /* Scrollable height for data area */
+  .tab-pane { display: none; } .tab-pane.active { display: block; }
+
+  /* Notification toast */
+  .toast {
+    position: fixed; bottom: 2rem; right: 2rem; z-index: 300;
+    background: var(--bg2); border: 1px solid var(--border2); border-radius: 10px;
+    padding: 0.75rem 1.25rem; font-size: 0.8rem; font-family: var(--mono);
+    transform: translateY(10px); opacity: 0; transition: all .3s; pointer-events: none;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: rgba(0,255,157,.3); }
+  .toast.error { border-color: rgba(255,107,107,.3); }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">
+    <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="8" width="24" height="12" rx="3" stroke="#63d2ff" stroke-width="1.5"/>
+      <rect x="6" y="12" width="3" height="4" rx="1" fill="#63d2ff"/>
+      <rect x="11" y="12" width="3" height="4" rx="1" fill="#63d2ff"/>
+      <rect x="16" y="12" width="3" height="4" rx="1" fill="#00ff9d"/>
+      <rect x="21" y="12" width="3" height="4" rx="1" fill="#63d2ff"/>
+      <line x1="14" y1="2" x2="14" y2="8" stroke="#63d2ff" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="8" y1="4" x2="8" y2="8" stroke="#63d2ff" stroke-width="1" stroke-linecap="round" stroke-dasharray="1 2"/>
+      <line x1="20" y1="4" x2="20" y2="8" stroke="#63d2ff" stroke-width="1" stroke-linecap="round" stroke-dasharray="1 2"/>
+      <line x1="14" y1="20" x2="14" y2="26" stroke="#63d2ff" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    ESP32 CONTROL HUB
+  </div>
+  <div class="ws-status">
+    <div class="ws-dot" id="wsDot"></div>
+    <span id="wsLabel">Connexion...</span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">Appareils connectés</div>
+    </div>
+    <div class="device-list" id="sidebarList"></div>
+    <button class="add-btn" onclick="openAddModal()">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      Ajouter un ESP32
+    </button>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content" id="mainContent">
+
+    <!-- HOME VIEW -->
+    <div class="home-view" id="homeView">
+      <div class="stats-grid">
+        <div class="stat-card" style="--accent-color: var(--accent)">
+          <div class="stat-label">Total appareils</div>
+          <div class="stat-value" id="statTotal">0</div>
+          <div class="stat-sub">enregistrés</div>
+        </div>
+        <div class="stat-card" style="--accent-color: var(--online)">
+          <div class="stat-label">En ligne</div>
+          <div class="stat-value" id="statOnline" style="color:var(--online)">0</div>
+          <div class="stat-sub">actifs maintenant</div>
+        </div>
+        <div class="stat-card" style="--accent-color: var(--offline)">
+          <div class="stat-label">Hors ligne</div>
+          <div class="stat-value" id="statOffline" style="color:var(--text2)">0</div>
+          <div class="stat-sub">inactifs</div>
+        </div>
+      </div>
+      <div class="section-title">Tous les appareils</div>
+      <div class="devices-grid" id="devicesGrid"></div>
+    </div>
+
+    <!-- DEVICE PAGE -->
+    <div class="device-page" id="devicePage">
+      <div class="page-header">
+        <div class="breadcrumb">
+          <span onclick="showHome()">Accueil</span>
+          <span class="breadcrumb-sep">/</span>
+          <span id="breadcrumbName" style="color:var(--text)"></span>
+        </div>
+        <div class="page-title">
+          <span id="pageDeviceName"></span>
+          <span class="status-chip" id="pageStatusChip">HORS LIGNE</span>
+        </div>
+        <div class="page-meta" id="pageDeviceMeta"></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('cmd')">⚡ Commandes</button>
+        <button class="tab" onclick="switchTab('data')">📊 Données</button>
+      </div>
+
+      <!-- CMD TAB -->
+      <div class="tab-pane active" id="tabCmd">
+        <div class="cmd-section">
+          <div class="cmd-label">Envoyer une commande</div>
+          <div class="cmd-input-row">
+            <input class="cmd-input" id="cmdInput" placeholder="ex: LED_ON, RESET, GET_STATUS..." onkeydown="if(event.key==='Enter')sendCommand()">
+            <button class="cmd-send-btn" id="cmdSendBtn" onclick="sendCommand()">Envoyer →</button>
+          </div>
+          <div class="quick-cmds">
+            <button class="quick-cmd" onclick="fillCmd('LED_ON')">LED_ON</button>
+            <button class="quick-cmd" onclick="fillCmd('LED_OFF')">LED_OFF</button>
+            <button class="quick-cmd" onclick="fillCmd('RESET')">RESET</button>
+            <button class="quick-cmd" onclick="fillCmd('GET_STATUS')">GET_STATUS</button>
+            <button class="quick-cmd" onclick="fillCmd('DEEP_SLEEP')">DEEP_SLEEP</button>
+            <button class="quick-cmd" onclick="fillCmd('READ_SENSORS')">READ_SENSORS</button>
+          </div>
+        </div>
+        <div class="cmd-section">
+          <div class="cmd-label">Historique des commandes</div>
+          <div class="cmd-log" id="cmdLog">
+            <div class="empty-state">Aucune commande envoyée</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DATA TAB -->
+      <div class="tab-pane" id="tabData">
+        <div class="data-toolbar">
+          <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+          <div class="data-count" id="dataCount">0 entrées</div>
+          <button class="refresh-btn" onclick="loadData()">↻ Actualiser</button>
+          <button class="clear-btn" onclick="clearData()">✕ Vider</button>
+        </div>
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Horodatage</th>
+                <th>Données reçues</th>
+              </tr>
+            </thead>
+            <tbody id="dataBody">
+              <tr><td colspan="3" class="empty-state">En attente de données...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD MODAL -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal">
+    <div class="modal-title">Ajouter un ESP32</div>
+    <div class="modal-sub">Renseignez les informations de votre carte. Des identifiants sécurisés seront générés automatiquement.</div>
+    <div class="form-group">
+      <label class="form-label">Nom de la carte *</label>
+      <input class="form-input" id="addName" placeholder="ex: Capteur Salon, Arduino Jardin...">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description (optionnel)</label>
+      <input class="form-input" id="addDesc" placeholder="ex: Capteur température + humidité">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeAddModal()">Annuler</button>
+      <button class="btn-confirm" onclick="addDevice()">Créer l'appareil →</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREDENTIALS MODAL -->
+<div class="modal-overlay" id="credModal">
+  <div class="modal">
+    <div class="modal-title">✅ Appareil créé</div>
+    <div class="modal-sub">Copiez ces identifiants dans votre code ESP32. Ils ne seront plus affichés après fermeture.</div>
+    <div class="cred-box">
+      <div class="cred-label">Device ID</div>
+      <div class="copy-row"><div class="cred-value" id="credId"></div><button class="copy-btn" onclick="copyField('credId')">copier</button></div>
+    </div>
+    <div class="cred-box">
+      <div class="cred-label">API Token</div>
+      <div class="copy-row"><div class="cred-value" id="credToken"></div><button class="copy-btn" onclick="copyField('credToken')">copier</button></div>
+    </div>
+    <div class="cred-box">
+      <div class="cred-label">Secret Key</div>
+      <div class="copy-row"><div class="cred-value" id="credSecret"></div><button class="copy-btn" onclick="copyField('credSecret')">copier</button></div>
+    </div>
+    <div class="cred-box">
+      <div class="cred-label">WebSocket URL</div>
+      <div class="copy-row"><div class="cred-value" id="credWsUrl"></div><button class="copy-btn" onclick="copyField('credWsUrl')">copier</button></div>
+    </div>
+    <div class="warning-note">⚠ Notez ces informations maintenant. L'API Token et le Secret Key ne seront plus accessibles ensuite.</div>
+    <div class="modal-actions">
+      <button class="btn-confirm" style="width:100%" onclick="closeCredModal()">J'ai copié mes identifiants</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
+<script>
+const API = '';
+let socket = null;
+let devices = {};
+let currentDevice = null;
+let activeTab = 'cmd';
+
+// ─── SOCKET.IO ────────────────────────────────────────────────────────────
+function connectWS() {
+  socket = io({ transports: ['websocket', 'polling'] });
+  socket.on('connect', () => {
+    setWSStatus(true);
+    socket.emit('message', { type: 'browser_connect' });
+  });
+  socket.on('disconnect', () => setWSStatus(false));
+  socket.on('message', ({ event, data, type }) => {
+    // Handle both browser events and esp32 direct messages
+    const ev = event || type;
+    if (ev === 'device_list') { devices = {}; data.forEach(d => devices[d.id] = d); renderAll(); }
+    if (ev === 'device_added') { devices[data.id] = data; renderAll(); }
+    if (ev === 'device_online') { if (devices[data.id]) { devices[data.id].is_online = 1; renderAll(); updatePageStatus(data.id); } }
+    if (ev === 'device_offline') { if (devices[data.id]) { devices[data.id].is_online = 0; renderAll(); updatePageStatus(data.id); } }
+    if (ev === 'device_removed') { delete devices[data.id]; renderAll(); if (currentDevice === data.id) showHome(); }
+    if (ev === 'new_data' && currentDevice === data.device_id && activeTab === 'data') addLiveRow(data);
+    if (ev === 'command_executed') { if (currentDevice === data.device_id) loadCommands(); }
+  });
+}
+
+function setWSStatus(ok) {
+  document.getElementById('wsDot').className = 'ws-dot' + (ok ? ' connected' : '');
+  document.getElementById('wsLabel').textContent = ok ? 'Connecté' : 'Reconnexion...';
+}
+
+// ─── RENDER ────────────────────────────────────────────────────────────────
+function renderAll() {
+  const list = Object.values(devices);
+  const online = list.filter(d => d.is_online).length;
+  document.getElementById('statTotal').textContent = list.length;
+  document.getElementById('statOnline').textContent = online;
+  document.getElementById('statOffline').textContent = list.length - online;
+  renderSidebar(list);
+  renderGrid(list);
+}
+
+function renderSidebar(list) {
+  const el = document.getElementById('sidebarList');
+  if (!list.length) { el.innerHTML = '<div style="padding:1rem;font-size:.75rem;color:var(--text3);text-align:center">Aucun appareil</div>'; return; }
+  el.innerHTML = list.map(d => `
+    <div class="device-item ${currentDevice===d.id?'active':''}" onclick="showDevice('${d.id}')">
+      <div class="device-dot ${d.is_online?'online':'offline'}"></div>
+      <div class="device-info">
+        <div class="device-name">${esc(d.name)}</div>
+        <div class="device-id">${d.id}</div>
+      </div>
+      <div class="device-badge ${d.is_online?'online':'offline'}">${d.is_online?'ON':'OFF'}</div>
+    </div>`).join('');
+}
+
+function renderGrid(list) {
+  const el = document.getElementById('devicesGrid');
+  if (!list.length) { el.innerHTML = '<div style="grid-column:1/-1;color:var(--text3);font-size:.85rem;padding:2rem">Aucun appareil enregistré. Cliquez sur "Ajouter un ESP32".</div>'; return; }
+  el.innerHTML = list.map(d => `
+    <div class="device-card ${d.is_online?'online-card':''}" onclick="showDevice('${d.id}')">
+      <div class="device-card-top">
+        <div>
+          <div class="device-card-name">${esc(d.name)}</div>
+          <div class="device-card-id">${d.id}</div>
+        </div>
+        <div class="device-badge ${d.is_online?'online':'offline'}" style="padding:4px 10px;border-radius:20px">${d.is_online?'● ONLINE':'○ OFFLINE'}</div>
+      </div>
+      <div class="device-card-desc">${esc(d.description||'')}</div>
+      <div class="device-card-footer">
+        <div class="last-seen">Vu: ${d.last_seen ? new Date(d.last_seen).toLocaleString('fr-FR') : 'jamais'}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ─── NAVIGATION ────────────────────────────────────────────────────────────
+function showHome() {
+  currentDevice = null;
+  document.getElementById('homeView').style.display = 'block';
+  document.getElementById('devicePage').className = 'device-page';
+  renderSidebar(Object.values(devices));
+}
+
+async function showDevice(id) {
+  currentDevice = id;
+  const d = devices[id];
+  document.getElementById('homeView').style.display = 'none';
+  document.getElementById('devicePage').className = 'device-page visible';
+  document.getElementById('breadcrumbName').textContent = d.name;
+  document.getElementById('pageDeviceName').textContent = d.name;
+  document.getElementById('pageDeviceMeta').textContent = `ID: ${d.id} · Créé le ${new Date(d.created_at).toLocaleDateString('fr-FR')}`;
+  updatePageStatus(id);
+  renderSidebar(Object.values(devices));
+  switchTab('cmd');
+  loadCommands();
+}
+
+function updatePageStatus(id) {
+  if (currentDevice !== id) return;
+  const d = devices[id];
+  if (!d) return;
+  const chip = document.getElementById('pageStatusChip');
+  chip.textContent = d.is_online ? 'EN LIGNE' : 'HORS LIGNE';
+  chip.className = 'status-chip' + (d.is_online ? '' : ' offline');
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['cmd','data'][i]===tab));
+  document.getElementById('tabCmd').className = 'tab-pane' + (tab==='cmd'?' active':'');
+  document.getElementById('tabData').className = 'tab-pane' + (tab==='data'?' active':'');
+  if (tab === 'data') loadData();
+}
+
+// ─── COMMANDES ─────────────────────────────────────────────────────────────
+function fillCmd(cmd) { document.getElementById('cmdInput').value = cmd; }
+
+async function sendCommand() {
+  const cmd = document.getElementById('cmdInput').value.trim();
+  if (!cmd || !currentDevice) return;
+  document.getElementById('cmdSendBtn').disabled = true;
+  try {
+    const r = await fetch(`/api/devices/${currentDevice}/command`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ command: cmd })
+    });
+    const data = await r.json();
+    document.getElementById('cmdInput').value = '';
+    toast(data.status === 'sent' ? `✓ Commande envoyée: ${cmd}` : `⏳ En attente (ESP32 hors ligne)`, data.status==='sent'?'success':'');
+    loadCommands();
+  } catch(e) { toast('Erreur réseau', 'error'); }
+  document.getElementById('cmdSendBtn').disabled = false;
+}
+
+async function loadCommands() {
+  if (!currentDevice) return;
+  const r = await fetch(`/api/devices/${currentDevice}/commands`);
+  const cmds = await r.json();
+  const el = document.getElementById('cmdLog');
+  if (!cmds.length) { el.innerHTML = '<div class="empty-state">Aucune commande envoyée</div>'; return; }
+  el.innerHTML = cmds.map(c => `
+    <div class="cmd-log-item">
+      <span class="cmd-status ${c.status}">${c.status}</span>
+      <span class="cmd-text">${esc(c.command)}</span>
+      <span class="cmd-time">${new Date(c.sent_at).toLocaleTimeString('fr-FR')}</span>
+    </div>`).join('');
+}
+
+// ─── DONNÉES ───────────────────────────────────────────────────────────────
+async function loadData() {
+  if (!currentDevice) return;
+  const r = await fetch(`/api/devices/${currentDevice}/data?limit=100`);
+  const rows = await r.json();
+  document.getElementById('dataCount').textContent = `${rows.length} entrées`;
+  const body = document.getElementById('dataBody');
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="3" class="empty-state">En attente de données...</td></tr>'; return; }
+  body.innerHTML = rows.map((row, i) => `
+    <tr>
+      <td style="color:var(--text3)">${row.id}</td>
+      <td class="data-ts">${new Date(row.received_at).toLocaleString('fr-FR')}</td>
+      <td class="data-val">${formatPayload(row.payload)}</td>
+    </tr>`).join('');
+}
+
+function addLiveRow(data) {
+  const body = document.getElementById('dataBody');
+  const placeholder = body.querySelector('.empty-state');
+  if (placeholder) body.innerHTML = '';
+  const tr = document.createElement('tr');
+  tr.className = 'new-row';
+  tr.innerHTML = `
+    <td style="color:var(--text3)">live</td>
+    <td class="data-ts">${new Date(data.ts).toLocaleString('fr-FR')}</td>
+    <td class="data-val">${formatPayload(data.payload)}</td>`;
+  body.insertBefore(tr, body.firstChild);
+  const count = body.querySelectorAll('tr').length;
+  document.getElementById('dataCount').textContent = `${count} entrées`;
+  if (count > 200) body.removeChild(body.lastChild);
+}
+
+function formatPayload(p) {
+  if (typeof p === 'object') return `<code style="color:var(--accent2)">${JSON.stringify(p, null, 2)}</code>`;
+  return `<code style="color:var(--accent2)">${esc(String(p))}</code>`;
+}
+
+async function clearData() {
+  if (!currentDevice || !confirm('Supprimer toutes les données de cet appareil ?')) return;
+  await fetch(`/api/devices/${currentDevice}/data`, { method: 'DELETE' });
+  document.getElementById('dataBody').innerHTML = '<tr><td colspan="3" class="empty-state">En attente de données...</td></tr>';
+  document.getElementById('dataCount').textContent = '0 entrées';
+  toast('Données supprimées');
+}
+
+// ─── MODALS ────────────────────────────────────────────────────────────────
+function openAddModal() { document.getElementById('addModal').className = 'modal-overlay open'; document.getElementById('addName').focus(); }
+function closeAddModal() { document.getElementById('addModal').className = 'modal-overlay'; }
+
+async function addDevice() {
+  const name = document.getElementById('addName').value.trim();
+  const desc = document.getElementById('addDesc').value.trim();
+  if (!name) { toast('Le nom est requis', 'error'); return; }
+  const r = await fetch('/api/devices', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ name, description: desc })
+  });
+  const data = await r.json();
+  closeAddModal();
+  document.getElementById('addName').value = '';
+  document.getElementById('addDesc').value = '';
+  const wsUrl = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}`;
+  document.getElementById('credId').textContent = data.id;
+  document.getElementById('credToken').textContent = data.api_token;
+  document.getElementById('credSecret').textContent = data.secret_key;
+  document.getElementById('credWsUrl').textContent = wsUrl;
+  document.getElementById('credModal').className = 'modal-overlay open';
+}
+
+function closeCredModal() { document.getElementById('credModal').className = 'modal-overlay'; }
+
+function copyField(id) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => toast('✓ Copié !', 'success'));
+}
+
+// ─── UTILS ─────────────────────────────────────────────────────────────────
+function toast(msg, type='') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  setTimeout(() => el.className = `toast ${type}`, 2500);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── INIT ──────────────────────────────────────────────────────────────────
+connectWS();
+</script>
+</body>
+</html>
